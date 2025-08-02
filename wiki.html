@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lex-Veritas: Saturation Canvas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the slider */
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #58a6ff;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #58a6ff;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+        .gemini-button {
+            background-color: #8957e5; /* A purple accent for Gemini features */
+            color: white;
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            border-radius: 12px;
+            cursor: pointer;
+            margin-left: 8px;
+            transition: background-color 0.2s;
+        }
+        .gemini-button:hover {
+            background-color: #986ee5;
+        }
+        .suggestion-button {
+            background-color: #30363d;
+            border: 1px solid #444c56;
+            color: #c9d1d9;
+            padding: 6px 12px;
+            font-size: 0.875rem;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 4px;
+            transition: background-color 0.2s;
+        }
+        .suggestion-button:hover {
+            background-color: #444c56;
+        }
+    </style>
+</head>
+<body class="bg-[#0d1117] text-[#c9d1d9] font-sans flex items-center justify-center min-h-screen p-4">
+
+    <div id="root"></div>
+
+    <!-- React and Babel for in-browser JSX rendering -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- React Components -->
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        // --- Helper function to call the Gemini API ---
+        // In a real application, this would be in a separate file.
+        // It includes exponential backoff for retries.
+        async function callGemini(prompt, isJson = false) {
+            let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+            const payload = { contents: chatHistory };
+            
+            if (isJson) {
+                payload.generationConfig = {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "items": {
+                                "type": "ARRAY",
+                                "items": { "type": "STRING" }
+                            }
+                        },
+                    }
+                };
+            }
+
+            const apiKey = ""; // API key is handled by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+            let response;
+            let result;
+            let retries = 3;
+            let delay = 1000;
+
+            while (retries > 0) {
+                try {
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        result = await response.json();
+                        if (result.candidates && result.candidates.length > 0 &&
+                            result.candidates[0].content && result.candidates[0].content.parts &&
+                            result.candidates[0].content.parts.length > 0) {
+                            const text = result.candidates[0].content.parts[0].text;
+                            return isJson ? JSON.parse(text) : text;
+                        }
+                    }
+                } catch (error) {
+                    console.error("API call failed:", error);
+                }
+                
+                retries--;
+                if (retries > 0) {
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2;
+                }
+            }
+            throw new Error("Failed to get a valid response from Gemini API after multiple retries.");
+        }
+
+
+        // The Saturation Canvas Component (no changes needed)
+        const SaturationCanvas = ({ progress }) => {
+            const canvasRef = useRef(null);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const context = canvas.getContext('2d');
+                if (!context) return;
+
+                const width = canvas.width;
+                const height = canvas.height;
+                const angle = (progress / 100) * 2 * Math.PI;
+
+                context.clearRect(0, 0, width, height);
+                context.beginPath();
+                context.arc(width / 2, height / 2, 80, 0, 2 * Math.PI);
+                context.strokeStyle = '#30363d';
+                context.lineWidth = 15;
+                context.stroke();
+
+                if (progress > 0) {
+                    context.beginPath();
+                    context.arc(width / 2, height / 2, 80, -0.5 * Math.PI, angle - 0.5 * Math.PI);
+                    context.strokeStyle = '#58a6ff';
+                    context.stroke();
+                }
+
+                context.fillStyle = '#c9d1d9';
+                context.font = 'bold 32px sans-serif';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.fillText(`${progress}%`, width / 2, height / 2);
+            }, [progress]);
+
+            return <canvas ref={canvasRef} width="200" height="200"></canvas>;
+        };
+
+        // Main App Component with Gemini features
+        const App = () => {
+            const [progress, setProgress] = useState(35);
+            const [isLoading, setIsLoading] = useState(false);
+            const [suggestions, setSuggestions] = useState([]);
+            const [explanation, setExplanation] = useState('');
+
+            const handleSuggestTopics = async () => {
+                setIsLoading(true);
+                setSuggestions([]);
+                try {
+                    const prompt = "Generate 5 interesting, esoteric, and specific topics for a Lex-Veritas Codex. The topics should be suitable for deep semantic analysis. Return as a JSON object with a single key 'items' which is an array of strings.";
+                    const result = await callGemini(prompt, true);
+                    setSuggestions(result.items || []);
+                } catch (error) {
+                    console.error(error);
+                    alert("Could not fetch topic suggestions.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleExplainConcept = async () => {
+                setIsLoading(true);
+                setExplanation('');
+                try {
+                    const prompt = "Explain the concept of 'informational saturation' for a knowledge document in a simple, one-paragraph metaphor. The tone should be insightful and clear.";
+                    const result = await callGemini(prompt);
+                    setExplanation(result);
+                } catch (error) {
+                    console.error(error);
+                    alert("Could not fetch an explanation.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-8 flex flex-col items-center gap-6 shadow-lg w-full max-w-2xl">
+                    <div className="flex items-center">
+                        <h1 className="text-2xl font-bold text-white">Codex Generation Progress</h1>
+                        <button onClick={handleExplainConcept} className="gemini-button" disabled={isLoading}>✨ Explain This Concept</button>
+                    </div>
+
+                    {explanation && <p className="text-center italic border-l-4 border-[#8957e5] pl-4">{explanation}</p>}
+                    
+                    <p className="text-center">Simulating the informational saturation of a topic.</p>
+                    <SaturationCanvas progress={progress} />
+                    
+                    <div className="w-full">
+                        <label htmlFor="progress-slider" className="block mb-2 text-sm font-medium">Adjust Saturation:</label>
+                        <input
+                            id="progress-slider"
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={progress}
+                            onChange={(e) => setProgress(Number(e.target.value))}
+                            className="w-full h-2 bg-[#30363d] rounded-lg appearance-none cursor-pointer"
+                        />
+                    </div>
+
+                    <div className="w-full border-t border-[#30363d] pt-6 mt-4 flex flex-col items-center">
+                         <button onClick={handleSuggestTopics} className="gemini-button text-base px-4 py-2" disabled={isLoading}>
+                            {isLoading ? 'Thinking...' : '✨ Suggest Topics'}
+                         </button>
+                         {suggestions.length > 0 && (
+                            <div className="mt-4 flex flex-wrap justify-center">
+                                {suggestions.map((s, i) => (
+                                    <button key={i} className="suggestion-button" onClick={() => alert(`You selected: "${s}"`)}>
+                                        {s}
+                                    </button>
+                                ))}
+                            </div>
+                         )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Updated rendering for React 18
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+
+</body>
+</html>
